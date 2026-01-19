@@ -1,12 +1,16 @@
-# Ukrywamy plik z tokenem
+# Ukrywamy plik z tokenem (Najważniejsze!)
 .env
-token.env
 
-# Ukrywamy pliki tymczasowe Pythona
+# Ukrywamy pliki tymczasowe Pythona (niepotrzebne na GitHubie)
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Ukrywamy foldery środowiska wirtualnego
+# Foldery środowisk wirtualnych
 venv/
 env/
+.venv/
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db
