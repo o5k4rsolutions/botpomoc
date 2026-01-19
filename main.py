@@ -3,13 +3,12 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import datetime
 import asyncio
-import random
 import os
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# --- SYSTEM UTRZYMANIA BOTA (KEEP ALIVE DLA RENDER) ---
+# --- SYSTEM UTRZYMANIA BOTA (KEEP ALIVE) ---
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is running!"
@@ -27,6 +26,7 @@ TOKEN = os.getenv("TOKEN")
 AUTHORIZED_ROLE_ID = 1437194858375680102
 TIKTOK_CHANNEL_ID = 1437380571180306534
 LOG_CHANNEL_ID = 1462908198074974433
+URLOP_POST_CHANNEL_ID = 1452784717802766397
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -35,35 +35,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 warns = {} # {user_id: [powody]}
 vacations = {} # {user_id: {"reason": str, "end": datetime}}
 
-JOKES = [
-    "Dlaczego matematyka jest smutna? Bo ma za dużo problemów.",
-    "Uczeń: Czy można dostać karę za coś czego się nie zrobiło? Nauczyciel: Nie. Uczeń: To dobrze, bo nie zrobiłem zadania.",
-    "Co robi nauczyciel na plaży? Tłumaczy falom.",
-    # ... tutaj możesz dopisać resztę swoich 60 żartów
-]
-
 # --- MODERACJA CHECK ---
 def is_mod():
     async def predicate(ctx):
         role = ctx.guild.get_role(AUTHORIZED_ROLE_ID)
         return role in ctx.author.roles
     return commands.check(predicate)
-
-# --- TICKETY (WIDOK) ---
-class TicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label="Otwórz Ticket", style=discord.ButtonStyle.green, custom_id="open_ticket")
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            interaction.guild.get_role(AUTHORIZED_ROLE_ID): discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        }
-        ticket_channel = await interaction.guild.create_text_channel(f"ticket-{interaction.user.name}", overwrites=overwrites)
-        await interaction.response.send_message(f"Stworzono ticket: {ticket_channel.mention}", ephemeral=True)
-        await ticket_channel.send(f"Witaj {interaction.user.mention}, opisz swój problem. Administracja zaraz pomoże.")
 
 # --- TASKS (URLOPY) ---
 @tasks.loop(minutes=1)
@@ -74,7 +51,7 @@ async def check_vacations():
         if now >= data["end"]:
             user = bot.get_user(uid)
             log_chan = bot.get_channel(LOG_CHANNEL_ID)
-            msg = f"🔔 {user.mention if user else 'Użytkownik'}, Twój urlop dobiegł końca!"
+            msg = f"🔔 <@{uid}>, Twój urlop dobiegł końca!"
             if log_chan: await log_chan.send(msg)
             try: await user.send(msg)
             except: pass
@@ -89,6 +66,13 @@ async def on_ready():
     check_vacations.start()
 
 @bot.event
+async def on_thread_create(thread):
+    # Obsługa postów na kanale urlopowym
+    if thread.parent_id == URLOP_POST_CHANNEL_ID:
+        await asyncio.sleep(2) # Chwila zwłoki na załadowanie wątku
+        await thread.send("UWAGA! Urlop został przekazany do akceptacji opiekunów. Bez akceptacji nie masz urlopu. Dostaniesz informację gdy twój urlop zostanie dodany do bazy danych.")
+
+@bot.event
 async def on_message(message):
     if message.author.bot: return
     # Blokada TikToka
@@ -97,15 +81,6 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # --- KOMENDY SLASH (/) ---
-
-@bot.tree.command(name="zart", description="Wysyła losowy żart o szkole")
-async def zart(interaction: discord.Interaction):
-    await interaction.response.send_message(random.choice(JOKES))
-
-@bot.tree.command(name="ticket_setup", description="Wysyła wiadomość z przyciskiem do ticketów")
-async def ticket_setup(interaction: discord.Interaction):
-    if not interaction.user.get_role(AUTHORIZED_ROLE_ID): return await interaction.response.send_message("Brak uprawnień", ephemeral=True)
-    await interaction.response.send_message("Kliknij przycisk poniżej, aby skontaktować się z administracją!", view=TicketView())
 
 @bot.tree.command(name="pv", description="Wysyła prywatną wiadomość do użytkownika")
 async def pv(interaction: discord.Interaction, idosoby: str, temat: str, wiadomosc: str, bezautora: bool = False, plik: discord.Attachment = None):
@@ -118,6 +93,17 @@ async def pv(interaction: discord.Interaction, idosoby: str, temat: str, wiadomo
     await user.send(embed=embed, file=file_to_send)
     await interaction.response.send_message(f"Wysłano wiadomość do {user.name}", ephemeral=True)
 
+@bot.tree.command(name="mess", description="Wysyła wiadomość Embed na wybrany kanał")
+async def mess(interaction: discord.Interaction, idkanalu: str, temat: str, wiadomosc: str, bezautora: bool = False, plik: discord.Attachment = None):
+    if not interaction.user.get_role(AUTHORIZED_ROLE_ID): return await interaction.response.send_message("Brak uprawnień", ephemeral=True)
+    channel = bot.get_channel(int(idkanalu))
+    embed = discord.Embed(title=temat, description=wiadomosc, color=discord.Color.green())
+    if not bezautora: embed.set_footer(text=f"Ogłoszenie od: {interaction.user.name}")
+    
+    file_to_send = await plik.to_file() if plik else None
+    await channel.send(embed=embed, file=file_to_send)
+    await interaction.response.send_message(f"Wysłano na <#{idkanalu}>", ephemeral=True)
+
 # --- KOMENDY MODERATORSKIE (!) ---
 
 @bot.command()
@@ -129,18 +115,15 @@ async def clear(ctx, ilosc: int):
         deleted_messages.append(message)
     
     deleted_messages.reverse()
-    await ctx.send(f"⏳ Archiwizuję {len(deleted_messages)} wiadomości...", delete_after=2)
-
     for msg in deleted_messages:
         if log_channel:
             files = [await a.to_file() for a in msg.attachments]
-            embed = discord.Embed(title="🗑️ Usunięta wiadomość", description=msg.content or "*Tylko załącznik*", color=discord.Color.orange(), timestamp=msg.created_at)
+            embed = discord.Embed(title="🗑️ Usunięta wiadomość", description=msg.content or "*Tylko plik*", color=discord.Color.orange(), timestamp=msg.created_at)
             embed.set_author(name=f"{msg.author}", icon_url=msg.author.avatar.url if msg.author.avatar else None)
-            embed.set_footer(text=f"Kanał: #{ctx.channel.name}")
             await log_channel.send(embed=embed, files=files)
 
     await ctx.channel.purge(limit=ilosc + 1)
-    await ctx.send("✅ Gotowe!", delete_after=3)
+    await ctx.send(f"✅ Usunięto i zarchiwizowano {len(deleted_messages)} wiadomości.", delete_after=3)
 
 @bot.command()
 @is_mod()
@@ -151,10 +134,36 @@ async def dodajurlop(ctx, id_osoby: int, dni: int, *, powod: str):
 
 @bot.command()
 @is_mod()
+async def usunurl(ctx, id_osoby: int):
+    if id_osoby in vacations:
+        del vacations[id_osoby]
+        await ctx.send(f"✅ Usunięto urlop dla <@{id_osoby}>.")
+    else:
+        await ctx.send("❌ Ta osoba nie ma aktywnego urlopu.")
+
+@bot.command()
+@is_mod()
 async def warn(ctx, user: discord.Member, *, powod: str):
     if user.id not in warns: warns[user.id] = []
     warns[user.id].append(powod)
-    await ctx.send(f"⚠️ {user.mention} otrzymał ostrzeżenie za: {powod}. (Suma: {len(warns[user.id])})")
+    await ctx.send(f"⚠️ {user.mention} ostrzeżony: {powod}. Suma: {len(warns[user.id])}")
+
+@bot.command()
+@is_mod()
+async def unwarn(ctx, user: discord.Member):
+    if user.id not in warns or not warns[user.id]:
+        return await ctx.send("Ten użytkownik nie ma ostrzeżeń.")
+    warns[user.id].pop()
+    await ctx.send(f"✅ Usunięto ostatnie ostrzeżenie dla {user.mention}. Pozostało: {len(warns[user.id])}")
+
+@bot.command()
+@is_mod()
+async def ban(ctx, user: discord.Member, *, powod: str):
+    try:
+        await user.send(f"Zostałeś zbanowany na serwerze za: {powod}")
+    except: pass
+    await user.ban(reason=powod)
+    await ctx.send(f"🔨 Zbanowano {user.name} za: {powod}")
 
 # --- URUCHOMIENIE ---
 keep_alive()
