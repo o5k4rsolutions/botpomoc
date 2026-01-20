@@ -1,8 +1,9 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+import sqlite3
 import datetime
-import asyncio
+import re
 import os
 from dotenv import load_dotenv
 from flask import Flask
@@ -10,161 +11,234 @@ from threading import Thread
 
 # --- SYSTEM UTRZYMANIA BOTA (KEEP ALIVE) ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is running!"
+def home():
+    return "Bot is running!"
 
 def run_flask():
+    # Port 8080 jest standardem dla usług typu Replit/render
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# --- KONFIGURACJA ---
+# --- KONFIGURACJA BOTA ---
 load_dotenv()
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv('TOKEN')
+
+# ID z Twojej specyfikacji
 AUTHORIZED_ROLE_ID = 1437194858375680102
 TIKTOK_CHANNEL_ID = 1437380571180306534
-LOG_CHANNEL_ID = 1462908198074974433
-URLOP_POST_CHANNEL_ID = 1452784717802766397
+VACATION_FORUM_ID = 1452784717802766397
+VACATION_LOG_CHANNEL_ID = 1462908198074974433
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Bazy danych w pamięci
-warns = {} # {user_id: [powody]}
-vacations = {} # {user_id: {"reason": str, "end": datetime}}
+# --- BAZA DANYCH SQLITE ---
+def setup_db():
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute('CREATE TABLE IF NOT EXISTS warns (user_id TEXT, reason TEXT, timestamp TEXT)')
+    c.execute('CREATE TABLE IF NOT EXISTS vacations (user_id TEXT, end_date TEXT, reason TEXT, active INTEGER)')
+    conn.commit()
+    conn.close()
 
-# --- MODERACJA CHECK ---
-def is_mod():
-    async def predicate(ctx):
-        role = ctx.guild.get_role(AUTHORIZED_ROLE_ID)
-        return role in ctx.author.roles
-    return commands.check(predicate)
+setup_db()
 
-# --- TASKS (URLOPY) ---
-@tasks.loop(minutes=1)
-async def check_vacations():
-    now = datetime.datetime.now()
-    expired = []
-    for uid, data in vacations.items():
-        if now >= data["end"]:
-            user = bot.get_user(uid)
-            log_chan = bot.get_channel(LOG_CHANNEL_ID)
-            msg = f"🔔 <@{uid}>, Twój urlop dobiegł końca!"
-            if log_chan: await log_chan.send(msg)
-            try: await user.send(msg)
-            except: pass
-            expired.append(uid)
-    for uid in expired: del vacations[uid]
+# --- KOMENDY MODERACYJNE ---
 
-# --- EVENTS ---
-@bot.event
-async def on_ready():
-    print(f"Zalogowano jako {bot.user}")
-    await bot.tree.sync()
-    check_vacations.start()
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def ban(ctx, member: discord.Member, *, reason="Brak powodu"):
+    try:
+        await member.send(f"Zostałeś zbanowany na serwerze {ctx.guild.name}. Powód: {reason}")
+    except:
+        pass
+    await member.ban(reason=reason)
+    await ctx.send(f"✅ Zbanowano {member.mention}. Powód: {reason}")
+
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def warn(ctx, member: discord.Member, *, reason):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO warns VALUES (?, ?, ?)", (str(member.id), reason, str(datetime.datetime.now())))
+    conn.commit()
+    conn.close()
+    await ctx.send(f"⚠️ Nadano ostrzeżenie dla {member.mention}. Powód: {reason}")
+
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def unwarn(ctx, member: discord.Member):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("SELECT rowid, reason FROM warns WHERE user_id = ?", (str(member.id),))
+    warns = c.fetchall()
+    
+    if not warns:
+        return await ctx.send("Ta osoba nie ma ostrzeżeń.")
+
+    class WarnView(discord.ui.View):
+        def __init__(self):
+            super().__init__()
+            for rowid, reason in warns:
+                btn = discord.ui.Button(label=f"Usuń: {reason[:20]}", style=discord.ButtonStyle.danger, custom_id=str(rowid))
+                btn.callback = self.callback
+                self.add_item(btn)
+
+        async def callback(self, interaction: discord.Interaction):
+            conn_int = sqlite3.connect('bot_data.db')
+            c_int = conn_int.cursor()
+            c_int.execute("DELETE FROM warns WHERE rowid = ?", (interaction.data['custom_id'],))
+            conn_int.commit()
+            conn_int.close()
+            await interaction.response.send_message("Ostrzeżenie usunięte!", ephemeral=True)
+            self.stop()
+
+    await ctx.send(f"Wybierz ostrzeżenie do usunięcia dla {member.name}:", view=WarnView())
+
+# --- KOMENDY SLASH (PV / MESS) ---
+
+@bot.tree.command(name="pv", description="Wysyła wiadomość prywatną z embedem")
+async def pv(interaction: discord.Interaction, osoba: discord.User, temat: str, wiadomosc: str, bezautora: bool = False, plik: discord.Attachment = None):
+    if interaction.user.get_role(AUTHORIZED_ROLE_ID) is None:
+        return await interaction.response.send_message("Brak uprawnień.", ephemeral=True)
+    
+    embed = discord.Embed(title=temat, description=wiadomosc, color=discord.Color.blue())
+    if not bezautora:
+        embed.set_footer(text=f"Autor: {interaction.user.display_name}")
+    
+    file = await plik.to_file() if plik else None
+    try:
+        await osoba.send(embed=embed, file=file)
+        await interaction.response.send_message(f"Wysłano PV do {osoba.name}", ephemeral=True)
+    except:
+        await interaction.response.send_message("Błąd: PV zablokowane.", ephemeral=True)
+
+@bot.tree.command(name="mess", description="Wysyła wiadomość na kanał")
+async def mess(interaction: discord.Interaction, kanal: discord.TextChannel, temat: str, wiadomosc: str, bezautora: bool = False, plik: discord.Attachment = None):
+    if interaction.user.get_role(AUTHORIZED_ROLE_ID) is None:
+        return await interaction.response.send_message("Brak uprawnień.", ephemeral=True)
+    
+    embed = discord.Embed(title=temat, description=wiadomosc, color=discord.Color.green())
+    if not bezautora:
+        embed.set_footer(text=f"Autor: {interaction.user.display_name}")
+    
+    file = await plik.to_file() if plik else None
+    await kanal.send(embed=embed, file=file)
+    await interaction.response.send_message(f"Wysłano na {kanal.mention}", ephemeral=True)
+
+# --- SYSTEM URLOPÓW ---
 
 @bot.event
 async def on_thread_create(thread):
-    # Obsługa postów na kanale urlopowym
-    if thread.parent_id == URLOP_POST_CHANNEL_ID:
-        await asyncio.sleep(2) # Chwila zwłoki na załadowanie wątku
-        await thread.send("UWAGA! Urlop został przekazany do akceptacji opiekunów. Bez akceptacji nie masz urlopu. Dostaniesz informację gdy twój urlop zostanie dodany do bazy danych.")
+    if thread.parent_id == VACATION_FORUM_ID:
+        embed = discord.Embed(
+            title="Wniosek o urlop",
+            description="Uwaga! Twój urlop został zapisany ale nie nadany. Otrzymasz informację gdy któryś z opiekunów nada urlop. Do tego momentu twój urlop nie jest aktywny.",
+            color=discord.Color.orange()
+        )
+        await thread.send(embed=embed)
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.emoji.name == "✅":
+        guild = bot.get_guild(payload.guild_id)
+        member = guild.get_member(payload.user_id)
+        if member is None or member.bot: return
+        
+        if member.get_role(AUTHORIZED_ROLE_ID):
+            channel = bot.get_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            
+            # Pobieranie daty i powodu
+            date_match = re.search(r"(\d{2}\.\d{2}\.\d{4})", message.content)
+            reason_match = re.search(r"[Zz] powodu\s+(.*)", message.content)
+            
+            if not date_match:
+                await channel.send(f"UWAGA! {message.author.mention},\nUrlop nie zostanie dodany do bazy z powodu błędu w wzorze (brak daty).")
+                return
+
+            end_date = date_match.group(1)
+            reason = reason_match.group(1).strip() if reason_match else "Brak powodu"
+            
+            conn = sqlite3.connect('bot_data.db')
+            c = conn.cursor()
+            c.execute("INSERT INTO vacations VALUES (?, ?, ?, 1)", (str(message.author.id), end_date, reason))
+            conn.commit()
+            conn.close()
+
+            confirm = (f"Cześć {message.author.mention},\nOpiekun {member.display_name} nadał twój urlop. "
+                       f"Dane zapisano w bazie NIZE PL. Kończy się: {end_date}. Powód: {reason}.")
+            
+            await channel.send(confirm)
+            try: await message.author.send(confirm)
+            except: pass
+
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def usunurl(ctx, member: discord.Member):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("UPDATE vacations SET active = 0 WHERE user_id = ?", (str(member.id),))
+    conn.commit()
+    conn.close()
+    await ctx.send(f"Usunięto urlop dla {member.mention}.")
+
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def urlopy(ctx):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("SELECT user_id, end_date, reason FROM vacations WHERE active = 1")
+    rows = c.fetchall()
+    if not rows: return await ctx.send("Brak aktywnych urlopów.")
+    
+    desc = "\n".join([f"<@{r[0]}> - do {r[1]} ({r[2]})" for r in rows])
+    await ctx.send(embed=discord.Embed(title="Aktywne urlopy", description=desc))
+
+# --- FILTR TIKTOKA I PĘTLE ---
 
 @bot.event
 async def on_message(message):
     if message.author.bot: return
-    # Blokada TikToka
-    if message.channel.id == TIKTOK_CHANNEL_ID and "tiktok.com" not in message.content:
-        await message.delete()
+    if message.channel.id == TIKTOK_CHANNEL_ID:
+        if "tiktok.com" not in message.content:
+            await message.delete()
+            return
     await bot.process_commands(message)
 
-# --- KOMENDY SLASH (/) ---
-
-@bot.tree.command(name="pv", description="Wysyła prywatną wiadomość do użytkownika")
-async def pv(interaction: discord.Interaction, idosoby: str, temat: str, wiadomosc: str, bezautora: bool = False, plik: discord.Attachment = None):
-    if not interaction.user.get_role(AUTHORIZED_ROLE_ID): return await interaction.response.send_message("Brak uprawnień", ephemeral=True)
-    user = await bot.fetch_user(int(idosoby))
-    embed = discord.Embed(title=temat, description=wiadomosc, color=discord.Color.blue())
-    if not bezautora: embed.set_footer(text=f"Od: {interaction.user.name}")
+@tasks.loop(hours=24)
+async def check_vacations():
+    today = datetime.datetime.now().strftime("%d.%m.%Y")
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM vacations WHERE end_date = ? AND active = 1", (today,))
+    expired = c.fetchall()
     
-    file_to_send = await plik.to_file() if plik else None
-    await user.send(embed=embed, file=file_to_send)
-    await interaction.response.send_message(f"Wysłano wiadomość do {user.name}", ephemeral=True)
-
-@bot.tree.command(name="mess", description="Wysyła wiadomość Embed na wybrany kanał")
-async def mess(interaction: discord.Interaction, idkanalu: str, temat: str, wiadomosc: str, bezautora: bool = False, plik: discord.Attachment = None):
-    if not interaction.user.get_role(AUTHORIZED_ROLE_ID): return await interaction.response.send_message("Brak uprawnień", ephemeral=True)
-    channel = bot.get_channel(int(idkanalu))
-    embed = discord.Embed(title=temat, description=wiadomosc, color=discord.Color.green())
-    if not bezautora: embed.set_footer(text=f"Ogłoszenie od: {interaction.user.name}")
+    log_chan = bot.get_channel(VACATION_LOG_CHANNEL_ID)
+    for row in expired:
+        user = bot.get_user(int(row[0]))
+        msg = f"🔔 {user.mention if user else row[0]}, Twój urlop minął!"
+        if log_chan: await log_chan.send(msg)
+        if user:
+            try: await user.send(msg)
+            except: pass
+        c.execute("UPDATE vacations SET active = 0 WHERE user_id = ?", (row[0],))
     
-    file_to_send = await plik.to_file() if plik else None
-    await channel.send(embed=embed, file=file_to_send)
-    await interaction.response.send_message(f"Wysłano na <#{idkanalu}>", ephemeral=True)
+    conn.commit()
+    conn.close()
 
-# --- KOMENDY MODERATORSKIE (!) ---
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    if not check_vacations.is_running():
+        check_vacations.start()
+    print(f"Bot Online: {bot.user}")
 
-@bot.command()
-@is_mod()
-async def clear(ctx, ilosc: int):
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
-    deleted_messages = []
-    async for message in ctx.channel.history(limit=ilosc):
-        deleted_messages.append(message)
-    
-    deleted_messages.reverse()
-    for msg in deleted_messages:
-        if log_channel:
-            files = [await a.to_file() for a in msg.attachments]
-            embed = discord.Embed(title="🗑️ Usunięta wiadomość", description=msg.content or "*Tylko plik*", color=discord.Color.orange(), timestamp=msg.created_at)
-            embed.set_author(name=f"{msg.author}", icon_url=msg.author.avatar.url if msg.author.avatar else None)
-            await log_channel.send(embed=embed, files=files)
-
-    await ctx.channel.purge(limit=ilosc + 1)
-    await ctx.send(f"✅ Usunięto i zarchiwizowano {len(deleted_messages)} wiadomości.", delete_after=3)
-
-@bot.command()
-@is_mod()
-async def dodajurlop(ctx, id_osoby: int, dni: int, *, powod: str):
-    end_date = datetime.datetime.now() + datetime.timedelta(days=dni)
-    vacations[id_osoby] = {"end": end_date, "reason": powod}
-    await ctx.send(f"✅ Dodano urlop dla <@{id_osoby}> do {end_date.strftime('%d.%m.%Y')}. Powód: {powod}")
-
-@bot.command()
-@is_mod()
-async def usunurl(ctx, id_osoby: int):
-    if id_osoby in vacations:
-        del vacations[id_osoby]
-        await ctx.send(f"✅ Usunięto urlop dla <@{id_osoby}>.")
-    else:
-        await ctx.send("❌ Ta osoba nie ma aktywnego urlopu.")
-
-@bot.command()
-@is_mod()
-async def warn(ctx, user: discord.Member, *, powod: str):
-    if user.id not in warns: warns[user.id] = []
-    warns[user.id].append(powod)
-    await ctx.send(f"⚠️ {user.mention} ostrzeżony: {powod}. Suma: {len(warns[user.id])}")
-
-@bot.command()
-@is_mod()
-async def unwarn(ctx, user: discord.Member):
-    if user.id not in warns or not warns[user.id]:
-        return await ctx.send("Ten użytkownik nie ma ostrzeżeń.")
-    warns[user.id].pop()
-    await ctx.send(f"✅ Usunięto ostatnie ostrzeżenie dla {user.mention}. Pozostało: {len(warns[user.id])}")
-
-@bot.command()
-@is_mod()
-async def ban(ctx, user: discord.Member, *, powod: str):
-    try:
-        await user.send(f"Zostałeś zbanowany na serwerze za: {powod}")
-    except: pass
-    await user.ban(reason=powod)
-    await ctx.send(f"🔨 Zbanowano {user.name} za: {powod}")
-
-# --- URUCHOMIENIE ---
-keep_alive()
+# --- START BOTA ---
+keep_alive() # Uruchamia serwer Flask w tle
 bot.run(TOKEN)
