@@ -6,16 +6,17 @@ import datetime
 import re
 import os
 import io
+import random
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# Importy bibliotek PDF (wymagają instalacji pypdf i reportlab)
+# Importy bibliotek PDF (wymagają pypdf i reportlab)
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import Color, black, white
 
-# --- SYSTEM UTRZYMANIA BOTA (KEEP ALIVE) ---
+# --- SYSTEM UTRZYMANIA BOTA (KEEP ALIVE DLA RENDER) ---
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is running!"
@@ -24,7 +25,7 @@ def keep_alive(): Thread(target=run_flask).start()
 
 # --- KONFIGURACJA ---
 load_dotenv()
-TOKEN = os.getenv('TOKEN')
+TOKEN = os.getenv('TOKEN') # Pobiera token ze zmiennych środowiskowych Render
 
 AUTHORIZED_ROLE_ID = 1437194858375680102
 TIKTOK_CHANNEL_ID = 1437380571180306534
@@ -32,74 +33,123 @@ VACATION_FORUM_ID = 1452784717802766397
 VACATION_LOG_CHANNEL_ID = 1462908198074974433
 
 WATERMARK_URL = "https://discord.gg/TESTYPL"
-WATERMARK_TEXT = "DISCORD.GG/TESTYPL"
-DISCORD_1 = "manager3194"
-DISCORD_2 = "duns0649"
+WATERMARK_TEXT_DISPLAY = "DISCORD.GG/TESTYPL"
+DISCORD_USERNAME = "manager3194"
+DISCORD_USERNAME_2 = "duns0649"
 
-# --- LOGIKA WATERMARKA (NIZE 2026) ---
-def add_watermark(pdf_bytes):
+# --- LOGIKA GENEROWANIA PDF (WERSJA PREMIUM 2026) ---
+def add_watermark(original_pdf_bytes: bytes) -> bytes:
     try:
-        reader = PdfReader(io.BytesIO(pdf_bytes))
+        reader = PdfReader(io.BytesIO(original_pdf_bytes))
         first_page = reader.pages[0]
-        W = float(first_page.mediabox.width)
-        H = float(first_page.mediabox.height)
+        PAGE_WIDTH = float(first_page.mediabox.width)
+        PAGE_HEIGHT = float(first_page.mediabox.height)
 
-        packet = io.BytesIO()
-        can = canvas.Canvas(packet, pagesize=(W, H))
+        watermark_buffer = io.BytesIO()
+        c = canvas.Canvas(watermark_buffer, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
         
-        # Marginesy
-        can.saveState()
-        can.setFillColor(white)
-        can.rect(0, 0, W, 50, fill=1)
-        can.rect(0, H - 20, W, 20, fill=1)
-        can.rect(W - 18, 0, 18, H, fill=1)
-        can.rect(0, 0, 15, H, fill=1)
-        can.restoreState()
+        # --- RAMKI (KOLOR PREMIUM BŁĘKIT) ---
+        c.saveState()
+        c.setFillColorRGB(0.9, 0.95, 1.0) 
+        c.rect(0, 0, PAGE_WIDTH, 50, fill=1)
+        c.rect(0, PAGE_HEIGHT - 20, PAGE_WIDTH, 20, fill=1)
+        c.rect(PAGE_WIDTH - 18, 0, 18, PAGE_HEIGHT, fill=1)
+        c.rect(0, 0, 15, PAGE_HEIGHT, fill=1)
+        c.restoreState()
 
-        can.linkURL(WATERMARK_URL, rect=(0, 0, W, H), thickness=0)
+        c.linkURL(WATERMARK_URL, rect=(0, 0, PAGE_WIDTH, PAGE_HEIGHT), thickness=0)
 
-        # Znaki wodne w tle
-        can.setFillColor(Color(0, 0, 0, alpha=0.07))
-        can.setFont("Helvetica-Bold", 35)
-        for i in range(1, 8):
-            can.saveState()
-            can.translate(W/2, (H/8)*i)
-            can.rotate(15 if i%2==0 else -15)
-            can.drawCentredString(0, 0, WATERMARK_TEXT)
-            can.restoreState()
+        # --- ŚRODKOWE ZNAKI WODNE (PRZEZROCZYSTE) ---
+        c.setFillColor(Color(0, 0, 0, alpha=0.07))
+        c.setFont("Helvetica-Bold", 35)
+        for i in range(1, 6):
+            c.saveState()
+            side_offset = -30 if i % 2 == 0 else 30
+            c.translate(PAGE_WIDTH/2 + side_offset, (PAGE_HEIGHT/6) * i)
+            c.rotate(15 if i % 2 == 0 else -15)
+            c.drawCentredString(0, 0, WATERMARK_TEXT_DISPLAY)
+            c.restoreState()
+            
+        # --- MAŁE MAILE W ŚRODKU ---
+        c.setFont("Helvetica-Bold", 10)
+        central_emails = ["nize@int.pl", "nizekontakt@int.pl"]
+        for mail in central_emails:
+            rand_x = random.uniform(PAGE_WIDTH*0.25, PAGE_WIDTH*0.75)
+            rand_y = random.uniform(PAGE_HEIGHT*0.25, PAGE_HEIGHT*0.75)
+            c.saveState()
+            c.translate(rand_x, rand_y)
+            c.rotate(random.choice([25, -25, 35, -35]))
+            c.drawCentredString(0, 0, mail)
+            c.restoreState()
 
-        # Napisy informacyjne
-        can.setFillColor(black)
-        can.setFont("Helvetica-Bold", 8)
-        can.drawCentredString(W/2, H-13, f"DOKUMENT WYGENEROWANY DLA: {WATERMARK_TEXT}")
-        can.drawCentredString(W/2, 23, f"W CELU ZAKUPU LUB PYTAN: {WATERMARK_TEXT}")
-        can.setFont("Helvetica", 7)
-        can.drawCentredString(W/2, 11, "NIZE © 2026 - Wszelkie prawa zastrzezone")
+        # --- TEKSTY NA KRAWĘDZIACH ---
+        txt_side_right = f"DISCORD: {DISCORD_USERNAME} | {DISCORD_USERNAME_2} | ZAKUP: {WATERMARK_TEXT_DISPLAY} | EMAIL: nizekontakt@int.pl"
+        txt_side_left = f"DISCORD: {DISCORD_USERNAME} | {DISCORD_USERNAME_2} | ZAKUP: {WATERMARK_TEXT_DISPLAY} | EMAIL: nize@int.pl"
+        txt_contact_bottom = f"KONTAKT: {DISCORD_USERNAME} | {DISCORD_USERNAME_2} | nizekontakt@int.pl | nize@int.pl" 
+        txt_purchase_bottom = f"W CELU ZAKUPU LUB PYTAN: {WATERMARK_TEXT_DISPLAY}"
+        txt_top = f"DOKUMENT WYGENEROWANY DLA: {WATERMARK_TEXT_DISPLAY}"
+        
+        current_time = datetime.datetime.now().strftime("%Y%m%d/%H:%M")
 
-        # Pionowy napis
-        can.setFont("Helvetica-Bold", 9)
-        can.saveState()
-        can.translate(W - 8, H / 2)
-        can.rotate(90)
-        can.drawCentredString(0, 0, f"DISCORD: {DISCORD_1} | {DISCORD_2} | ZAKUP: {WATERMARK_TEXT}")
-        can.restoreState()
+        # --- GÓRA I DÓŁ ---
+        c.setFillColor(black)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawCentredString(PAGE_WIDTH / 2, PAGE_HEIGHT - 13, txt_top)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(PAGE_WIDTH / 2, 35, txt_contact_bottom)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawCentredString(PAGE_WIDTH / 2, 23, txt_purchase_bottom)
 
-        can.save()
-        packet.seek(0)
-        new_pdf = PdfReader(packet)
-        output = PdfWriter()
+        # --- SPECJALNA LINIA Z WIĘKSZYM © ---
+        poczatek = "NIZE "
+        koniec = f" 2026 - Wszelkie prawa zastrzezone | DATA: {current_time}"
+        
+        c.setFont("Helvetica", 6.5)
+        w_poczatek = c.stringWidth(poczatek, "Helvetica", 6.5)
+        c.setFont("Helvetica-Bold", 12)
+        w_symbol = c.stringWidth("©", "Helvetica-Bold", 12)
+        c.setFont("Helvetica", 6.5)
+        w_koniec = c.stringWidth(koniec, "Helvetica", 6.5)
+        
+        total_w = w_poczatek + w_symbol + w_koniec
+        start_x = (PAGE_WIDTH - total_w) / 2
+        
+        c.setFont("Helvetica", 6.5)
+        c.drawString(start_x, 11, poczatek)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(start_x + w_poczatek, 10, "©") 
+        c.setFont("Helvetica", 6.5)
+        c.drawString(start_x + w_poczatek + w_symbol, 11, koniec)
+        
+        # --- NAPISY BOCZNE (PIONOWE) ---
+        c.setFont("Helvetica-Bold", 9) 
+        c.saveState() 
+        c.translate(PAGE_WIDTH - 8, PAGE_HEIGHT / 2)
+        c.rotate(90)
+        c.drawCentredString(0, 0, txt_side_right)
+        c.restoreState()
+        c.saveState() 
+        c.translate(8, PAGE_HEIGHT / 2)
+        c.rotate(90)
+        c.drawCentredString(0, 0, txt_side_left)
+        c.restoreState()
+
+        c.save()
+        watermark_buffer.seek(0)
+        water_page = PdfReader(watermark_buffer).pages[0]
+        writer = PdfWriter()
 
         for page in reader.pages:
-            page.merge_page(new_pdf.pages[0])
-            output.add_page(page)
+            page.merge_page(water_page)
+            writer.add_page(page)
 
-        output.encrypt(user_password='', owner_password="SecretPassword", permissions_flag=-4092)
-        res_bytes = io.BytesIO()
-        output.write(res_bytes)
-        return res_bytes.getvalue()
+        writer.encrypt(user_password='', owner_password="SecretPassword", permissions_flag=-4092)
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
     except Exception as e:
         print(f"Błąd PDF: {e}")
-        return pdf_bytes
+        return original_pdf_bytes
 
 # --- POMOCNICZA FUNKCJA DO PLIKÓW ---
 async def process_attachments(attachments):
@@ -132,32 +182,12 @@ setup_db()
 async def on_ready():
     await bot.tree.sync()
     if not check_vacations.is_running(): check_vacations.start()
-    print(f"✅ Bot Online: {bot.user}")
-
-# --- KOMENDY MODERACYJNE ---
-
-@bot.command()
-@commands.has_role(AUTHORIZED_ROLE_ID)
-async def ban(ctx, member: discord.Member, *, reason="Brak powodu"):
-    try: await member.send(f"Zostałeś zbanowany na serwerze {ctx.guild.name}. Powód: {reason}")
-    except: pass
-    await member.ban(reason=reason)
-    await ctx.send(f"✅ Zbanowano {member.mention}. Powód: {reason}")
-
-@bot.command()
-@commands.has_role(AUTHORIZED_ROLE_ID)
-async def warn(ctx, member: discord.Member, *, reason):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO warns VALUES (?, ?, ?)", (str(member.id), reason, str(datetime.datetime.now())))
-    conn.commit()
-    conn.close()
-    await ctx.send(f"⚠️ Nadano ostrzeżenie dla {member.mention}. Powód: {reason}")
+    print(f"✅ Bot {bot.user} Online. System NIZE gotowy.")
 
 # --- KOMENDY SLASH (PV / MESS) ---
 
-@bot.tree.command(name="pv", description="PV do wielu osób i wiele plików")
-@app_commands.describe(osoby="Wspomnij osoby lub wklej ID", temat="Temat wiadomości", wiadomosc="Treść wiadomości")
+@bot.tree.command(name="pv", description="Wysyła wiadomość do wielu osób z wieloma plikami")
+@app_commands.describe(osoby="Wspomnij osoby lub wklej ID", temat="Temat wiadomości", wiadomosc="Treść")
 async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc: str, 
              plik1: discord.Attachment = None, plik2: discord.Attachment = None, plik3: discord.Attachment = None):
     
@@ -165,10 +195,10 @@ async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc
         return await interaction.response.send_message("Brak uprawnień.", ephemeral=True)
     
     await interaction.response.defer(ephemeral=True)
-    user_ids = list(set(re.findall(r'\d+', osoby)))
+    user_ids = list(set(re.findall(r'\d+', osoby))) # Wyciąga wszystkie ID z tekstu
     
     if not user_ids:
-        return await interaction.followup.send("❌ Nie wykryto żadnych osób (użyj wzmianek lub ID).")
+        return await interaction.followup.send("❌ Nie wykryto żadnych osób (użyj wzmianek lub wklej ID).")
 
     processed_files = await process_attachments([plik1, plik2, plik3])
     embed = discord.Embed(title=temat, description=wiadomosc, color=discord.Color.blue())
@@ -181,11 +211,11 @@ async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc
             current_files = [discord.File(io.BytesIO(f["data"]), filename=f["name"]) for f in processed_files]
             await user.send(embed=embed, files=current_files)
             success.append(user.name)
-        except:
+        except Exception as e:
             failed.append(u_id)
 
     res = f"✅ Wysłano do: {', '.join(success)}" if success else "❌ Nie wysłano do nikogo."
-    if failed: res += f"\n⚠️ Nie udało się do (zablokowane PV): {len(failed)} osób."
+    if failed: res += f"\n⚠️ Błąd u {len(failed)} osób (zablokowane PV)."
     await interaction.followup.send(res)
 
 @bot.tree.command(name="mess", description="Wiadomość na kanał z wieloma plikami")
@@ -205,33 +235,23 @@ async def mess(interaction: discord.Interaction, kanal: discord.TextChannel, tem
     await kanal.send(embed=embed, files=discord_files)
     await interaction.followup.send(f"✅ Wysłano na {kanal.mention}")
 
-# --- SYSTEM URLOPÓW ---
+# --- SYSTEM MODERACJI I URLOPÓW ---
 
-@bot.event
-async def on_thread_create(thread):
-    if thread.parent_id == VACATION_FORUM_ID:
-        embed = discord.Embed(title="Wniosek o urlop", description="Twój urlop został zapisany. Czekaj na zatwierdzenie przez opiekuna.", color=discord.Color.orange())
-        await thread.send(embed=embed)
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def ban(ctx, member: discord.Member, *, reason="Brak powodu"):
+    await member.ban(reason=reason)
+    await ctx.send(f"✅ Zbanowano {member.mention}.")
 
-@bot.event
-async def on_raw_reaction_add(payload):
-    if payload.emoji.name == "✅":
-        guild = bot.get_guild(payload.guild_id)
-        member = guild.get_member(payload.user_id)
-        if not member or member.bot: return
-        if any(r.id == AUTHORIZED_ROLE_ID for r in member.roles):
-            channel = bot.get_channel(payload.channel_id)
-            message = await channel.fetch_message(payload.message_id)
-            date_match = re.search(r"(\d{2}\.\d{2}\.\d{4})", message.content)
-            if not date_match: return
-            
-            end_date = date_match.group(1)
-            conn = sqlite3.connect('bot_data.db')
-            c = conn.cursor()
-            c.execute("INSERT INTO vacations VALUES (?, ?, ?, 1)", (str(message.author.id), end_date, "Zatwierdzony"))
-            conn.commit()
-            conn.close()
-            await channel.send(f"✅ Urlop zatwierdzony dla {message.author.mention} do {end_date}.")
+@bot.command()
+@commands.has_role(AUTHORIZED_ROLE_ID)
+async def warn(ctx, member: discord.Member, *, reason):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO warns VALUES (?, ?, ?)", (str(member.id), reason, str(datetime.datetime.now())))
+    conn.commit()
+    conn.close()
+    await ctx.send(f"⚠️ Warn dla {member.mention}. Powód: {reason}")
 
 @tasks.loop(hours=24)
 async def check_vacations():
@@ -247,8 +267,6 @@ async def check_vacations():
     conn.commit()
     conn.close()
 
-# --- FILTR TIKTOKA ---
-
 @bot.event
 async def on_message(message):
     if message.author.bot: return
@@ -257,6 +275,6 @@ async def on_message(message):
         return
     await bot.process_commands(message)
 
-# START
+# --- START ---
 keep_alive()
 bot.run(TOKEN)
