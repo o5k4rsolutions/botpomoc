@@ -20,6 +20,10 @@ from reportlab.lib.colors import Color, black, white
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
 
+# Sprawdzenie czy token istnieje
+if not TOKEN:
+    print("BŁĄD: Brak zmiennej TOKEN w środowisku!")
+
 AUTHORIZED_ROLE_ID = 1437194858375680102
 TIKTOK_CHANNEL_ID = 1437380571180306534
 VACATION_FORUM_ID = 1452784717802766397
@@ -27,22 +31,29 @@ VACATION_LOG_CHANNEL_ID = 1462908198074974433
 
 WATERMARK_URL = "https://discord.gg/TESTYPL"
 WATERMARK_TEXT_DISPLAY = "DISCORD.GG/TESTYPL"
-DISCORD_USERNAME = "manager3194"
-DISCORD_USERNAME_2 = "duns0649"
 
-# --- SYSTEM KEEP ALIVE ---
+# --- SYSTEM KEEP ALIVE (POPRAWKA DLA RENDER.COM) ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is running!"
-def run_flask(): app.run(host='0.0.0.0', port=8080)
-def keep_alive(): Thread(target=run_flask).start()
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    # Render przypisuje port dynamicznie w zmiennej PORT
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
 
 # --- BAZA DANYCH ---
 def setup_db():
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS warns (user_id TEXT, reason TEXT, timestamp TEXT)')
-    # IF NOT EXISTS gwarantuje, że stare dane urlopów nie zostaną usunięte przy starcie bota
     c.execute('CREATE TABLE IF NOT EXISTS vacations (user_id TEXT, end_date TEXT, reason TEXT, active INTEGER)')
     conn.commit()
     conn.close()
@@ -113,12 +124,13 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    if not check_vacations.is_running(): check_vacations.start()
-    print(f"✅ Bot {bot.user} Online. System NIZE gotowy.")
+    if not check_vacations.is_running(): 
+        check_vacations.start()
+    print(f"✅ Bot {bot.user} Online. Port: {os.environ.get('PORT', '8080')}")
 
 # --- KOMENDY SLASH ---
 
-@bot.tree.command(name="pv", description="Wysyła wiadomość do wielu osób (maks. 4 pliki)")
+@bot.tree.command(name="pv", description="Wysyła wiadomość do wielu osób")
 async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc: str, 
              pokaz_autora: bool = True, plik1: discord.Attachment = None, plik2: discord.Attachment = None,
              plik3: discord.Attachment = None, plik4: discord.Attachment = None):
@@ -140,11 +152,12 @@ async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc
             files = [discord.File(io.BytesIO(f["data"]), filename=f["name"]) for f in processed_files]
             await user.send(embed=embed, files=files)
             success.append(user.name)
-        except: failed.append(u_id)
+        except: 
+            failed.append(u_id)
 
     await interaction.followup.send(f"✅ Wysłano: {len(success)} | ❌ Błąd: {len(failed)}")
 
-@bot.tree.command(name="mess", description="Wysyła wiadomość na kanał (maks. 4 pliki)")
+@bot.tree.command(name="mess", description="Wysyła wiadomość na kanał")
 async def mess(interaction: discord.Interaction, kanal: discord.TextChannel, temat: str, wiadomosc: str, 
                pokaz_autora: bool = True, plik1: discord.Attachment = None, plik2: discord.Attachment = None,
                plik3: discord.Attachment = None, plik4: discord.Attachment = None):
@@ -161,7 +174,7 @@ async def mess(interaction: discord.Interaction, kanal: discord.TextChannel, tem
     await kanal.send(embed=embed, files=files)
     await interaction.followup.send(f"✅ Wysłano na {kanal.mention}")
 
-# --- SYSTEM URLOPÓW (KOMENDY) ---
+# --- SYSTEM URLOPÓW ---
 
 @bot.command()
 @commands.has_role(AUTHORIZED_ROLE_ID)
@@ -199,7 +212,7 @@ async def urlopy(ctx):
         txt += f"• <@{r[0]}> - do {r[1]} (Powód: {r[2]})\n"
     await ctx.send(txt)
 
-# --- OBSŁUGA FORUM I MODERACJI ---
+# --- OBSŁUGA FORUM ---
 
 @bot.event
 async def on_thread_create(thread):
@@ -220,9 +233,10 @@ async def on_thread_create(thread):
 async def on_raw_reaction_add(payload):
     if payload.emoji.name == "✅" and payload.user_id != bot.user.id:
         guild = bot.get_guild(payload.guild_id)
+        if not guild: return
         member = guild.get_member(payload.user_id)
         
-        if any(r.id == AUTHORIZED_ROLE_ID for r in member.roles):
+        if member and any(r.id == AUTHORIZED_ROLE_ID for r in member.roles):
             channel = bot.get_channel(payload.channel_id)
             if isinstance(channel, discord.Thread) and channel.parent_id == VACATION_FORUM_ID:
                 async for message in channel.history(limit=1, oldest_first=True):
@@ -246,7 +260,7 @@ async def on_raw_reaction_add(payload):
                         conn.close()
 
                         msg_text = (f"Cześć {user_urlop.mention},\n"
-                                    f"Opiekun **{member.display_name}** nadał Twój urlop. System zapisał dane NIZE PL.\n"
+                                    f"Opiekun **{member.display_name}** nadał Twój urlop.\n"
                                     f"📅 Koniec: **{data_koniec}**\n"
                                     f"📝 Powód: *{powod_match}*\n"
                                     f"Miłego wypoczynku!")
@@ -256,17 +270,15 @@ async def on_raw_reaction_add(payload):
                         except: pass
                         
                     except Exception as e:
-                        await channel.send(f"❌ BŁĄD! {user_urlop.mention}, urlop nie został dodany z powodu błędnego wzoru.")
+                        print(f"Błąd urlopu: {e}")
 
 @bot.event
 async def on_message(message):
     if message.author.bot: return
-
     if message.channel.id == TIKTOK_CHANNEL_ID:
         if "tiktok.com" not in message.content:
             await message.delete()
             return
-
     await bot.process_commands(message)
 
 # --- PETLA SPRAWDZANIA URLOPÓW ---
@@ -284,11 +296,11 @@ async def check_vacations():
     for row in expired:
         u_id = int(row[0])
         user = await bot.fetch_user(u_id)
-        msg = f"🔔 Urlop <@{u_id}> właśnie się zakończył! Zapraszamy do powrotu do obowiązków."
+        msg = f"🔔 Urlop <@{u_id}> właśnie się zakończył!"
         
         if log_chan: await log_chan.send(msg)
         if main_chan: await main_chan.send(msg)
-        try: await user.send("Twój urlop w NIZE PL dobiegł końca. Witamy z powrotem!")
+        try: await user.send("Twój urlop w NIZE PL dobiegł końca.")
         except: pass
         
         c.execute("UPDATE vacations SET active = 0 WHERE user_id = ?", (str(u_id),))
