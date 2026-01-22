@@ -41,8 +41,8 @@ def keep_alive(): Thread(target=run_flask).start()
 def setup_db():
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
-    # "IF NOT EXISTS" gwarantuje, że dane nie zostaną usunięte przy aktualizacji skryptu
     c.execute('CREATE TABLE IF NOT EXISTS warns (user_id TEXT, reason TEXT, timestamp TEXT)')
+    # IF NOT EXISTS gwarantuje, że stare dane urlopów nie zostaną usunięte przy starcie bota
     c.execute('CREATE TABLE IF NOT EXISTS vacations (user_id TEXT, end_date TEXT, reason TEXT, active INTEGER)')
     conn.commit()
     conn.close()
@@ -116,9 +116,9 @@ async def on_ready():
     if not check_vacations.is_running(): check_vacations.start()
     print(f"✅ Bot {bot.user} Online. System NIZE gotowy.")
 
-# --- KOMENDY SLASH (PV / MESS) ---
+# --- KOMENDY SLASH ---
 
-@bot.tree.command(name="pv", description="Wysyła wiadomość do wielu osób (do 4 plików)")
+@bot.tree.command(name="pv", description="Wysyła wiadomość do wielu osób (maks. 4 pliki)")
 async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc: str, 
              pokaz_autora: bool = True, plik1: discord.Attachment = None, plik2: discord.Attachment = None,
              plik3: discord.Attachment = None, plik4: discord.Attachment = None):
@@ -144,7 +144,7 @@ async def pv(interaction: discord.Interaction, osoby: str, temat: str, wiadomosc
 
     await interaction.followup.send(f"✅ Wysłano: {len(success)} | ❌ Błąd: {len(failed)}")
 
-@bot.tree.command(name="mess", description="Wysyła wiadomość na kanał (do 4 plików)")
+@bot.tree.command(name="mess", description="Wysyła wiadomość na kanał (maks. 4 pliki)")
 async def mess(interaction: discord.Interaction, kanal: discord.TextChannel, temat: str, wiadomosc: str, 
                pokaz_autora: bool = True, plik1: discord.Attachment = None, plik2: discord.Attachment = None,
                plik3: discord.Attachment = None, plik4: discord.Attachment = None):
@@ -161,7 +161,7 @@ async def mess(interaction: discord.Interaction, kanal: discord.TextChannel, tem
     await kanal.send(embed=embed, files=files)
     await interaction.followup.send(f"✅ Wysłano na {kanal.mention}")
 
-# --- SYSTEM URLOPÓW ---
+# --- SYSTEM URLOPÓW (KOMENDY) ---
 
 @bot.command()
 @commands.has_role(AUTHORIZED_ROLE_ID)
@@ -240,7 +240,7 @@ async def on_raw_reaction_add(payload):
 
                         conn = sqlite3.connect('bot_data.db')
                         c = conn.cursor()
-                        c.execute("INSERT INTO vacations (user_id, end_date, reason, active) VALUES (?, ?, ?, 1)", 
+                        c.execute("INSERT INTO vacations VALUES (?, ?, ?, 1)", 
                                   (str(user_urlop.id), data_koniec, powod_match))
                         conn.commit()
                         conn.close()
@@ -256,15 +256,17 @@ async def on_raw_reaction_add(payload):
                         except: pass
                         
                     except Exception as e:
-                        await channel.send(f"❌ BŁĄD! {user_urlop.mention}, urlop nie został dodany.")
+                        await channel.send(f"❌ BŁĄD! {user_urlop.mention}, urlop nie został dodany z powodu błędnego wzoru.")
 
 @bot.event
 async def on_message(message):
     if message.author.bot: return
+
     if message.channel.id == TIKTOK_CHANNEL_ID:
         if "tiktok.com" not in message.content:
             await message.delete()
             return
+
     await bot.process_commands(message)
 
 # --- PETLA SPRAWDZANIA URLOPÓW ---
