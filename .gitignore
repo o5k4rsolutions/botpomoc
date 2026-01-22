@@ -1,12 +1,4 @@
-# Plik z tokenem bota (Musi tu być!)
 .env
-
-# Pliki tymczasowe Pythona
+bot_data.db
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Foldery środowiska wirtualnego
-venv/
-env/
-.venv/
+*.pyc
