@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# Importy bibliotek PDF
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import Color, black, white
