@@ -1,5 +1,5 @@
 discord.py
-flask
-python-dotenv
 pypdf
 reportlab
+python-dotenv
+flask
