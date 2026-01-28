@@ -1,4 +1,12 @@
-node_modules/
+# Klucz bota (Najważniejsze!)
 .env
+
+# Biblioteki (Serwer sam je pobierze)
+node_modules/
+
+# Lokalna baza danych
 bot_data.db
-*.log
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db
