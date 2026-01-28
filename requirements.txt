@@ -1,5 +1,0 @@
-discord.py
-pypdf
-reportlab
-python-dotenv
-flask
