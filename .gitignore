@@ -1,18 +1,4 @@
-# Tokeny i dane wrażliwe
+node_modules/
 .env
-TOKEN
-
-# Bazy danych
-*.db
-*.sqlite3
-
-# Pliki Pythona i systemowe
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-ENV/
-
-# Pliki tymczasowe PDF
-*.pdf
+bot_data.db
+*.log
